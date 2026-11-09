@@ -1,0 +1,12 @@
+# 同步日志（本地，不入库）
+logs/
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
+*.swp
