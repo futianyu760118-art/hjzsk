@@ -68,6 +68,7 @@ function isRetryable(errText) {
     'connection reset',
     'connection timed out',
     'timed out',
+    'etimedout',        // Node 子进程超时的原始错误码（无空格，需单独匹配）
     'could not resolve host',
     'temporary failure in name resolution',
     'the remote end hung up',
