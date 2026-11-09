@@ -66,6 +66,7 @@ function isRetryable(errText) {
     'server closed abruptly',
     'missing close_notify',
     'connection reset',
+    'connection was reset',   // git 原文为 "Recv failure: Connection was reset"（含 was）
     'connection timed out',
     'timed out',
     'etimedout',        // Node 子进程超时的原始错误码（无空格，需单独匹配）
