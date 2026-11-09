@@ -110,11 +110,19 @@ function runGit(args) {
 /**
  * 执行 git 命令，网络类错误自动重试（指数退避）。
  * 非网络错误（如合并冲突）立即返回，不做无谓重试。
+ *
+ * 重试策略：代理隧道僵死时，关闭 HTTP 连接复用可强制重新握手，
+ * 通过 -c 传参仅影响本次调用，不污染全局配置。
  */
 function git(args) {
   let last = null;
   for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
-    last = runGit(args);
+    // 第 2 次起禁用 keepalive，绕开僵死的代理连接
+    const effective = attempt === 1
+      ? args
+      : ['-c', 'http.keepalive=false', ...args];
+
+    last = runGit(effective);
     if (last.ok) return last;
 
     if (!isRetryable(last.err)) return last;

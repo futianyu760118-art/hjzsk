@@ -1,0 +1,44 @@
+# EdgeQuake Webhook —— Caddy 反向代理（HTTPS 自动证书）
+#
+# 安装:
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# 前置条件:
+#   1. 域名 A 记录指向服务器公网 IP
+#   2. 服务器 80/443 端口已在云厂商安全组放行
+#   3. Caddy 容器已映射 80/443 与本目录的 ./webhook Caddyfile
+
+:80 {
+    # HTTP 一律跳 HTTPS
+    redir https://{host}{uri} permanent
+}
+
+webhook.example.com {
+    encode zstd gzip
+
+    # Gitee 需要能访问到本服务
+    handle /webhook {
+        reverse_proxy webhook:9000 {
+            # Gitee 要求 5 秒内返回，这里放宽超时但不改应用行为
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 10s
+            }
+        }
+    }
+
+    # 健康检查
+    handle /health {
+        reverse_proxy webhook:9000
+    }
+
+    handle {
+        respond "EdgeQuake webhook endpoint. POST /webhook" 200
+    }
+
+    log {
+        output file /var/log/caddy/edgequake-webhook.log
+        format json
+    }
+}

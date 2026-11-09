@@ -1,0 +1,29 @@
+[Unit]
+Description=EdgeQuake Webhook 接收服务 (Gitee -> 知识图谱增量摄入)
+Documentation=https://github.com/raphaelmansuy/edgequake
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/edgequake-webhook
+
+# 容器方式：与 docker compose 的 webhook 服务一致
+ExecStart=/usr/bin/docker compose -f /opt/edgequake-webhook/docker-compose.yml up -f webhook --no-deps
+ExecStop=/usr/bin/docker compose -f /opt/edgequake-webhook/docker-compose.yml rm -f -s webhook
+
+Restart=always
+RestartSec=10
+# 反复失败时不要无限重启，给出告警窗口
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edgequake-webhook
+
+[Install]
+WantedBy=multi-user.target
