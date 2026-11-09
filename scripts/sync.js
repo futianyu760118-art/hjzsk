@@ -72,8 +72,12 @@ function isRetryable(errText) {
     'etimedout',        // Node 子进程超时的原始错误码（无空格，需单独匹配）
     'could not resolve host',
     'temporary failure in name resolution',
+    'could not connect to server',   // git 原文 "Could not connect to server"
+    'failed to connect to',          // git 原文 "Failed to connect to github.com:443 after N ms"
     'the remote end hung up',
     'early eof',
+    'non-properly terminated',   // TLS 握手被中断，属网络层抖动
+    'gnutls_handshake',
     'rpc failed',
     '502',
     '503',
