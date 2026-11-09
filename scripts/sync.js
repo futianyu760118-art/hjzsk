@@ -38,6 +38,8 @@ const DRY_RUN = argv.includes('--dry-run');
 const STATUS_ONLY = argv.includes('--status');
 
 const GIT_TIMEOUT = 120000;
+const MAX_RETRY = 5;          // 网络类错误重试次数
+const RETRY_BASE_MS = 2000;   // 重试退避基数（指数增长）
 let logFile = null;
 
 /* ────────────────────────── 基础设施 ────────────────────────── */
@@ -52,7 +54,40 @@ function log(msg, level = 'INFO') {
   }
 }
 
-function git(args) {
+/**
+ * 判断错误是否属于网络/代理抖动（可重试）。
+ * 这类错误在代理隧道复用失败时非常常见。
+ */
+function isRetryable(errText) {
+  const t = (errText || '').toLowerCase();
+  const patterns = [
+    'connect tunnel failed',
+    'empty reply from server',
+    'server closed abruptly',
+    'missing close_notify',
+    'connection reset',
+    'connection timed out',
+    'timed out',
+    'could not resolve host',
+    'temporary failure in name resolution',
+    'the remote end hung up',
+    'early eof',
+    'rpc failed',
+    '502',
+    '503',
+    '504',
+    'bad gateway',
+    'service unavailable',
+  ];
+  return patterns.some((p) => t.includes(p));
+}
+
+function sleep(ms) {
+  // 同步阻塞等待，仅用于重试退避
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function runGit(args) {
   try {
     const out = execFileSync('git', args, {
       cwd: REPO_ROOT,
@@ -70,6 +105,41 @@ function git(args) {
       err: e.stderr ? e.stderr.toString() : (e.message || String(e)),
     };
   }
+}
+
+/**
+ * 执行 git 命令，网络类错误自动重试（指数退避）。
+ * 非网络错误（如合并冲突）立即返回，不做无谓重试。
+ */
+function git(args) {
+  let last = null;
+  for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+    last = runGit(args);
+    if (last.ok) return last;
+
+    if (!isRetryable(last.err)) return last;
+    if (attempt === MAX_RETRY) {
+      log(`git ${args.join(' ')} 重试 ${MAX_RETRY} 次仍失败: ${last.err.trim().split('\n')[0]}`, 'ERROR');
+      return last;
+    }
+    const wait = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+    log(`网络异常(${last.err.trim().split('\n')[0]})，${Math.round(wait / 1000)}s 后重试 [${attempt}/${MAX_RETRY}]`, 'WARN');
+    sleep(wait);
+  }
+  return last;
+}
+
+/**
+ * 拉取远端分支。网络抖动时重试，最终失败返回 false（不中断同步流程）。
+ */
+function fetchRemote(remote) {
+  const r = git(['fetch', remote, BRANCH]);
+  if (r.ok) {
+    log(`已拉取 ${remote}/${BRANCH}`);
+    return true;
+  }
+  log(`拉取 ${remote}/${BRANCH} 失败: ${r.err.trim().split('\n')[0]}`, 'WARN');
+  return false;
 }
 
 function revParse(ref) {
@@ -285,6 +355,10 @@ function main() {
   }
 
   try {
+    // 先拉取两端，否则无法感知远端的新提交
+    fetchRemote(PRIMARY);
+    fetchRemote(MIRROR);
+
     const aligned = alignLocalToPrimary();
     const outcome = mirrorToPrimary(aligned);
 
