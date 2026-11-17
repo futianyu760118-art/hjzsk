@@ -40,7 +40,13 @@ const STATUS_ONLY = argv.includes('--status');
 const GIT_TIMEOUT = 120000;
 const MAX_RETRY = 5;          // 网络类错误重试次数
 const RETRY_BASE_MS = 2000;   // 重试退避基数（指数增长）
+// 固定 HTTP 收发缓冲区，避免仓库 config 里过大的 http.postBuffer
+// （曾设为 524288000 = 500MB）在系统提交额度紧张时触发
+// "Out of memory, malloc failed"，导致 fetch/ls-remote 全部失败。
+// 32MB 对本仓库（最大文件 26KB）绰绰有余。
+const HTTP_POST_BUFFER = 33554432;
 let logFile = null;
+let fetchFailures = [];      // 记录本轮拉取失败的远端，用于避免用陈旧缓存 ref 下结论
 
 /* ────────────────────────── 基础设施 ────────────────────────── */
 
@@ -79,6 +85,8 @@ function isRetryable(errText) {
     'non-properly terminated',   // TLS 握手被中断，属网络层抖动
     'gnutls_handshake',
     'rpc failed',
+    'malloc failed',       // git 预分配 HTTP 缓冲区失败："Out of memory, malloc failed"
+    'out of memory',
     '502',
     '503',
     '504',
@@ -123,10 +131,12 @@ function runGit(args) {
 function git(args) {
   let last = null;
   for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
-    // 第 2 次起禁用 keepalive，绕开僵死的代理连接
+    // 第 2 次起禁用 keepalive，绕开僵死的代理连接；
+    // 同时每次调用固定 http.postBuffer，绕开仓库 config 里的过大值。
+    const base = ['-c', `http.postBuffer=${HTTP_POST_BUFFER}`];
     const effective = attempt === 1
-      ? args
-      : ['-c', 'http.keepalive=false', ...args];
+      ? [...base, ...args]
+      : [...base, '-c', 'http.keepalive=false', ...args];
 
     last = runGit(effective);
     if (last.ok) return last;
@@ -145,6 +155,7 @@ function git(args) {
 
 /**
  * 拉取远端分支。网络抖动时重试，最终失败返回 false（不中断同步流程）。
+ * 失败时记录到 fetchFailures，避免后续用陈旧缓存 ref 下「已一致」结论。
  */
 function fetchRemote(remote) {
   const r = git(['fetch', remote, BRANCH]);
@@ -153,6 +164,7 @@ function fetchRemote(remote) {
     return true;
   }
   log(`拉取 ${remote}/${BRANCH} 失败: ${r.err.trim().split('\n')[0]}`, 'WARN');
+  fetchFailures.push(remote);
   return false;
 }
 
@@ -381,6 +393,12 @@ function main() {
     log(`最终状态: 主=${short(s.O)} 镜像=${short(s.M)} 关系=${s.relation}`);
     if (outcome.merged) log('本次执行了跨端合并');
     else log('本次无跨端合并（快进或已一致）');
+
+    // 拉取失败时，refs/remotes/* 是陈旧缓存，"一致" 的结论不可信 —— 必须明确告知
+    if (fetchFailures.length) {
+      const names = fetchFailures.map((r) => `${r}/${BRANCH}`).join('、');
+      log(`注意：本轮 ${names} 拉取失败，上面的一致性结论基于本地缓存 ref，未实时核对远端，请用 git ls-remote 复核`, 'WARN');
+    }
 
     if (stashed) {
       git(['stash', 'pop']);
